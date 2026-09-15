@@ -110,12 +110,46 @@ $env:ALTQ_DRY_RUN = "0"
 python run.py 5
 ```
 
+### Running it against real data (SEC EDGAR + Yahoo Finance)
+
+`edgar_provider.py` is a real, non-mock `DataProvider` implementation. It tests one
+concrete hypothesis: does an issuer's trailing 90-day count of 8-K filings (a proxy
+for unscheduled-disclosure / operational-uncertainty intensity) cross-sectionally
+predict short-horizon returns, across a fixed 25-name liquid large-cap universe.
+Both data sources are free and require no account:
+
+- **Signal**: SEC EDGAR's `submissions` API (`data.sec.gov/submissions/CIK...json`),
+  filtered to `8-K` filings. A filing's `filingDate` is fixed at submission and
+  never restated, so there is no look-ahead in the signal itself.
+- **Returns**: Yahoo Finance daily closes via `yfinance`.
+
+Before running it, open `edgar_provider.py` and replace the `SEC_USER_AGENT`
+placeholder with your own name and email — SEC's fair-access policy requires a
+real, identifying User-Agent on every request and can rate-limit or block generic
+ones.
+
+```powershell
+pip install yfinance requests   # if not already installed
+$env:ALTQ_DRY_RUN = "1"
+$env:ALTQ_DATA_SOURCE = "edgar"
+python run.py 3
+```
+
+Raw API responses are cached to `data_cache/` (git-ignored) so repeated runs don't
+re-hit SEC/Yahoo every time. On a first real run against the default universe and a
+3-year lookback, this hypothesis came back **REJECTed**: a raw annualized Sharpe of
+1.48 but a Deflated Sharpe Ratio of 0.91 — just under the 0.95 gate once the honest
+trial count is applied. That's the pipeline doing exactly what it's for: most
+first-pass alt-data hypotheses, even ones with a plausible economic story, don't
+survive contact with a multiple-testing-aware statistical review.
+
 ## Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
 | `ALTQ_DRY_RUN` | `1` | `1` = stub hypothesis + rule-based Skeptic verdict, no API cost. `0` = live `claude-opus-5` calls. |
-| `ALTQ_TRUE_BETA` | `0.0` | Strength of the true signal baked into the mock `DataProvider`. Only affects dry-run testing. |
+| `ALTQ_DATA_SOURCE` | `mock` | `mock` = synthetic `DataProvider` (fast, deterministic). `edgar` = real SEC EDGAR + Yahoo Finance data via `EdgarFilingCadenceProvider`. |
+| `ALTQ_TRUE_BETA` | `0.0` | Strength of the true signal baked into the mock `DataProvider`. Only affects `ALTQ_DATA_SOURCE=mock` runs. |
 | `ANTHROPIC_API_KEY` | — | Required when `ALTQ_DRY_RUN=0`. |
 
 `run.py <max_trials>` — trial budget before the graph routes to `abort` instead of
@@ -132,8 +166,13 @@ What's real:
 
 What's still a placeholder:
 
-- **`DataProvider` in `graph.py` is synthetic data**, not a real alt-data feed. This
-  is the actual engineering work remaining — see the implementation guide below.
+- **`edgar_provider.py` proves the pattern with one free, real hypothesis, but
+  doesn't enforce point-in-time universe membership** — it uses today's 25-name
+  ticker list across all history, which is a survivorship-bias risk for anything
+  beyond a demonstration. A real study needs a historically-accurate universe.
+- The default `DataProvider` in `graph.py` (used when `ALTQ_DATA_SOURCE=mock`) is
+  still fully synthetic — useful for fast iteration on the graph/statistics
+  themselves, not for research conclusions.
 - No persistence/checkpointing between runs (LangGraph supports a `SqliteSaver`
   checkpointer; not yet wired in).
 - No live kill-switch monitor — the kill-switch thresholds are attached to the
@@ -142,9 +181,11 @@ What's still a placeholder:
 
 ### Path to production, in order
 
-1. Replace `DataProvider.load()` with a real point-in-time data source (no
-   restated/backfilled fields, first-availability timestamps, historically-accurate
-   liquidity universe).
+1. ~~Replace `DataProvider.load()` with a real data source~~ — done for one
+   hypothesis via `edgar_provider.py` (SEC EDGAR + Yahoo Finance). Next: fix the
+   survivorship-bias gap above, and/or wire in a second, less overused signal from
+   the data-sources list (AIS shipping, web/app traffic, workforce data — see
+   project notes) to give Discovery more than one real feed to draw hypotheses from.
 2. Re-validate DSR/PBO against synthetic panels built from *that* data source's
    actual noise characteristics.
 3. Turn on live LLM calls (`ALTQ_DRY_RUN=0`) and add server-side refusal fallbacks

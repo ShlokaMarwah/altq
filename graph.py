@@ -12,6 +12,7 @@ from prompts import DISCOVERY_SYSTEM, SKEPTIC_SYSTEM
 
 MODEL = "claude-opus-5"
 DRY_RUN = os.environ.get("ALTQ_DRY_RUN", "1") == "1"   # 1 = no API calls, deterministic stubs
+DATA_SOURCE = os.environ.get("ALTQ_DATA_SOURCE", "mock")  # "mock" | "edgar"
 
 
 # ---------- schemas ----------
@@ -84,7 +85,14 @@ class DataProvider:
         return self.signal, self.rets
 
 
-PROVIDER = DataProvider()
+def _build_provider():
+    if DATA_SOURCE == "edgar":
+        from edgar_provider import EdgarFilingCadenceProvider
+        return EdgarFilingCadenceProvider()
+    return DataProvider()
+
+
+PROVIDER = _build_provider()
 
 
 def _variant_returns(sig: pd.DataFrame, rets: pd.DataFrame, lag: int, window: int) -> np.ndarray:
@@ -99,7 +107,18 @@ def _variant_returns(sig: pd.DataFrame, rets: pd.DataFrame, lag: int, window: in
 # ---------- nodes ----------
 def discovery_node(state: PipelineState) -> dict:
     trial = state.get("trial", 0) + 1
-    if DRY_RUN:
+    if DRY_RUN and DATA_SOURCE == "edgar":
+        batch = HypothesisBatch(hypotheses=[Hypothesis(
+            id=f"H{trial}",
+            data_source="SEC EDGAR submissions API: 90d trailing count of 8-K filings per issuer, free, updated on filing",
+            transmission_mechanism="Elevated unscheduled 8-K disclosure cadence signals operational/financial uncertainty -> slow diffusion to inattentive investors -> short-horizon negative drift",
+            target_universe="Liquid large-cap US equities (fixed 25-name universe, see edgar_provider.DEFAULT_UNIVERSE)",
+            lag_days=3, decay_days=20,
+            signal_construction="90d trailing count of 8-K filings, cross-sectional z-score/quintile rank",
+            null_prediction="IC(3d) <= 0.01 or DSR < 0.95 => reject",
+            confounders=["earnings-announcement clustering", "size", "volatility regime"])],
+            declared_n_trials=6)
+    elif DRY_RUN:
         batch = HypothesisBatch(hypotheses=[Hypothesis(
             id=f"H{trial}", data_source="Mock: port-berth AIS dwell times, daily, 2018-",
             transmission_mechanism="Berth congestion -> delayed COGS recognition -> negative EPS surprise for importers",
