@@ -22,6 +22,8 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from pit_universe import mask_pre_inclusion
+
 # SEC requires a descriptive User-Agent identifying the requester per its
 # fair-access policy: https://www.sec.gov/os/webmaster-faq#developers
 # Replace this with your own name/contact before running anything beyond a
@@ -122,5 +124,6 @@ class EdgarFilingCadenceProvider:
 
         common = [c for c in rets.columns if c in sig.columns]
         rets, sig = rets[common].fillna(0.0), sig[common].fillna(0.0)
+        sig, rets = mask_pre_inclusion(sig, rets)   # forward-survivorship fix - see pit_universe.py
         self._cache = (sig, rets)
         return self._cache

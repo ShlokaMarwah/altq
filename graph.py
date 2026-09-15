@@ -12,7 +12,7 @@ from prompts import DISCOVERY_SYSTEM, SKEPTIC_SYSTEM
 
 MODEL = "claude-opus-5"
 DRY_RUN = os.environ.get("ALTQ_DRY_RUN", "1") == "1"   # 1 = no API calls, deterministic stubs
-DATA_SOURCE = os.environ.get("ALTQ_DATA_SOURCE", "mock")  # "mock" | "edgar"
+DATA_SOURCE = os.environ.get("ALTQ_DATA_SOURCE", "mock")  # "mock" | "edgar" | "trends"
 
 
 # ---------- schemas ----------
@@ -89,6 +89,9 @@ def _build_provider():
     if DATA_SOURCE == "edgar":
         from edgar_provider import EdgarFilingCadenceProvider
         return EdgarFilingCadenceProvider()
+    if DATA_SOURCE == "trends":
+        from trends_provider import GoogleTrendsAttentionProvider
+        return GoogleTrendsAttentionProvider()
     return DataProvider()
 
 
@@ -117,6 +120,17 @@ def discovery_node(state: PipelineState) -> dict:
             signal_construction="90d trailing count of 8-K filings, cross-sectional z-score/quintile rank",
             null_prediction="IC(3d) <= 0.01 or DSR < 0.95 => reject",
             confounders=["earnings-announcement clustering", "size", "volatility regime"])],
+            declared_n_trials=6)
+    elif DRY_RUN and DATA_SOURCE == "trends":
+        batch = HypothesisBatch(hypotheses=[Hypothesis(
+            id=f"H{trial}",
+            data_source="Google Trends search-interest index (pytrends, unofficial), weekly, relative to own trailing baseline",
+            transmission_mechanism="Abnormal spike in brand-name search volume -> retail-investor attention shock -> short-horizon price pressure (Da, Engelberg & Gao 2011 mechanism)",
+            target_universe="Consumer-facing brand names with unambiguous search terms (fixed 12-name universe, see trends_provider.TICKER_TO_QUERY)",
+            lag_days=3, decay_days=14,
+            signal_construction="Attention shock = (interest - trailing 8-period mean) / trailing 8-period std, cross-sectional quintile L/S",
+            null_prediction="IC(3d) <= 0.01 or DSR < 0.95 => reject",
+            confounders=["earnings-date clustering", "product-launch calendar", "market-wide volatility regime"])],
             declared_n_trials=6)
     elif DRY_RUN:
         batch = HypothesisBatch(hypotheses=[Hypothesis(

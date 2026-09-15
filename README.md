@@ -143,12 +143,66 @@ trial count is applied. That's the pipeline doing exactly what it's for: most
 first-pass alt-data hypotheses, even ones with a plausible economic story, don't
 survive contact with a multiple-testing-aware statistical review.
 
+### A second, independent real signal (Google Trends attention)
+
+`trends_provider.py` tests a different hypothesis, from a different data source,
+with a different economic mechanism, so Discovery has more than one real feed to
+draw from:
+
+- **Signal**: Google Trends search-interest index via `pytrends` (unofficial),
+  turned into an *attention shock* — current interest minus the name's own
+  trailing baseline, in units of its own trailing standard deviation — for 12
+  consumer-facing brand names with unambiguous search terms (Tesla, Nvidia,
+  Netflix, Starbucks, Nike, Boeing, Disney, Costco, Uber, PayPal, Airbnb,
+  Palantir).
+- **Returns**: Yahoo Finance daily closes via `yfinance`, same as the EDGAR provider.
+- **Mechanism**: a search-interest spike proxies a retail-attention shock, which
+  the attention literature (Da, Engelberg & Gao, 2011) associates with
+  short-horizon price pressure.
+
+```powershell
+pip install pytrends lxml   # if not already installed
+$env:ALTQ_DRY_RUN = "1"
+$env:ALTQ_DATA_SOURCE = "trends"
+python run.py 3
+```
+
+`pytrends` is an **unofficial** scraper, not a supported API — it rate-limits
+aggressively (HTTP 429) under repeated testing, and the provider retries with
+exponential backoff (up to ~3 minutes total) rather than failing outright. If it
+still fails, wait a few minutes before rerunning; this is a known limitation of
+the free tier, documented in the module docstring, not a bug to chase.
+
+On a first real run (default 12-name universe, 3-year lookback), this hypothesis
+also came back **REJECTed** — an annualized Sharpe of 0.56 and a Deflated Sharpe
+Ratio of 0.24, well short of the 0.95 gate. Two-for-two real-data rejections is
+the expected base rate for first-pass alt-data ideas, not a sign anything is
+broken — see the Skeptic's whole design intent above.
+
+### Fixing forward-survivorship bias (`pit_universe.py`)
+
+Both real providers now mask out a ticker's history from before it actually
+joined the S&P 500 — sourced from Wikipedia's current-membership table (free, no
+key). This matters concretely for the Trends universe: Palantir (added
+2024-09-23) and Uber (added 2023-12-18) both fall inside the default 3-year
+lookback, so without the mask the pipeline would credit them with "large,
+liquid, index-covered" status for a stretch of history when that wasn't true yet.
+
+**What this does not fix**: backward survivorship. A company removed from the
+S&P 500 before today (bankruptcy, acquisition, delisting) is absent from
+Wikipedia's *current* membership table and can never appear in either universe —
+there's no free source for full point-in-time index history. Any DSR/CSCV result
+here still overstates achievable Sharpe to the extent failed or acquired names
+would have dragged on it. Fixing that properly needs a licensed dataset (WRDS/CRSP
+or a paid Nasdaq Data Link constituents table) — out of scope for a free-data
+prototype, and flagged as an open item below rather than glossed over.
+
 ## Environment variables
 
 | Variable | Default | Effect |
 |---|---|---|
 | `ALTQ_DRY_RUN` | `1` | `1` = stub hypothesis + rule-based Skeptic verdict, no API cost. `0` = live `claude-opus-5` calls. |
-| `ALTQ_DATA_SOURCE` | `mock` | `mock` = synthetic `DataProvider` (fast, deterministic). `edgar` = real SEC EDGAR + Yahoo Finance data via `EdgarFilingCadenceProvider`. |
+| `ALTQ_DATA_SOURCE` | `mock` | `mock` = synthetic `DataProvider`. `edgar` = SEC EDGAR + Yahoo Finance (`EdgarFilingCadenceProvider`). `trends` = Google Trends + Yahoo Finance (`GoogleTrendsAttentionProvider`). |
 | `ALTQ_TRUE_BETA` | `0.0` | Strength of the true signal baked into the mock `DataProvider`. Only affects `ALTQ_DATA_SOURCE=mock` runs. |
 | `ANTHROPIC_API_KEY` | — | Required when `ALTQ_DRY_RUN=0`. |
 
@@ -166,10 +220,17 @@ What's real:
 
 What's still a placeholder:
 
-- **`edgar_provider.py` proves the pattern with one free, real hypothesis, but
-  doesn't enforce point-in-time universe membership** — it uses today's 25-name
-  ticker list across all history, which is a survivorship-bias risk for anything
-  beyond a demonstration. A real study needs a historically-accurate universe.
+- **Backward survivorship bias is not fixed, and can't be with free data.**
+  `pit_universe.py` masks out a ticker's history before it joined the S&P 500
+  (forward bias — fixed), but a company removed from the index before today
+  (bankruptcy, acquisition, delisting) is simply absent from both real providers'
+  universes and always will be without a licensed historical-constituents dataset.
+  Treat both real DSR/PBO results above as an upper bound on what a truly
+  survivorship-free study would show, not the final word.
+- Both real providers still use a small, hand-picked, fixed ticker list rather
+  than a systematically-defined universe (e.g. "all S&P 500 members, historically
+  accurate, above a liquidity floor") — fine for demonstrating the pipeline works
+  on real data, not yet a real research universe.
 - The default `DataProvider` in `graph.py` (used when `ALTQ_DATA_SOURCE=mock`) is
   still fully synthetic — useful for fast iteration on the graph/statistics
   themselves, not for research conclusions.
@@ -182,10 +243,14 @@ What's still a placeholder:
 ### Path to production, in order
 
 1. ~~Replace `DataProvider.load()` with a real data source~~ — done for one
-   hypothesis via `edgar_provider.py` (SEC EDGAR + Yahoo Finance). Next: fix the
-   survivorship-bias gap above, and/or wire in a second, less overused signal from
-   the data-sources list (AIS shipping, web/app traffic, workforce data — see
-   project notes) to give Discovery more than one real feed to draw hypotheses from.
+   hypothesis via `edgar_provider.py` (SEC EDGAR + Yahoo Finance).
+   ~~Fix forward-survivorship bias~~ — done via `pit_universe.py`, wired into both
+   real providers. ~~Wire in a second, independent real signal~~ — done via
+   `trends_provider.py` (Google Trends attention shocks). Both real hypotheses
+   tested so far were correctly REJECTed by the Skeptic gate. Next: a systematic,
+   historically-accurate universe (fixes the hand-picked-list gap above), and/or
+   a third signal from the data-sources list (AIS shipping, workforce data — see
+   project notes) once you want more than two real feeds for Discovery to draw on.
 2. Re-validate DSR/PBO against synthetic panels built from *that* data source's
    actual noise characteristics.
 3. Turn on live LLM calls (`ALTQ_DRY_RUN=0`) and add server-side refusal fallbacks
