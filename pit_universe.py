@@ -1,7 +1,8 @@
 """Point-in-time universe membership: fixes forward-survivorship bias only.
 
-What this fixes: a fixed ticker list (like DEFAULT_UNIVERSE in edgar_provider.py
-or trends_provider.py) implicitly claims each name was a large, liquid,
+What this fixes: any fixed ticker list - whether hand-picked (trends_provider.py's
+TICKER_TO_QUERY) or systematic (sp500_tickers() below) - implicitly claims each
+name was a large, liquid,
 well-covered index constituent for the *entire* backtest window. For a name
 added to the S&P 500 partway through that window (Uber, Airbnb, and Palantir
 were all added within the last ~2-3 years as of writing), that claim is false
@@ -41,8 +42,31 @@ WIKI_USER_AGENT = "altq-research (replace-with-your-contact@example.com)"
 
 CACHE_DIR = Path(__file__).parent / "data_cache"
 CACHE_DIR.mkdir(exist_ok=True)
+_TABLE_CACHE_FILE = CACHE_DIR / "sp500_table.json"
 _CACHE_FILE = CACHE_DIR / "sp500_addition_dates.json"
 _CACHE_MAX_AGE_DAYS = 7
+
+
+def _sp500_table() -> pd.DataFrame | None:
+    """Raw current S&P 500 constituent table from Wikipedia (Symbol, Date added, ...).
+
+    Shared fetch behind both sp500_addition_dates() and sp500_tickers() so a
+    membership run only hits Wikipedia once per cache window. Returns None
+    (with a printed warning) on any failure - callers decide the fallback.
+    """
+    if _TABLE_CACHE_FILE.exists():
+        age_days = (time.time() - _TABLE_CACHE_FILE.stat().st_mtime) / 86400
+        if age_days < _CACHE_MAX_AGE_DAYS:
+            return pd.read_json(_TABLE_CACHE_FILE)
+    try:
+        resp = requests.get(WIKI_URL, headers={"User-Agent": WIKI_USER_AGENT}, timeout=20)
+        resp.raise_for_status()
+        table = pd.read_html(io.StringIO(resp.text))[0]
+        table.to_json(_TABLE_CACHE_FILE)
+        return table
+    except Exception as exc:  # network hiccup, Wikipedia layout change, etc.
+        print(f"[pit_universe] WARNING: could not fetch the S&P 500 table ({exc}).")
+        return None
 
 
 def sp500_addition_dates() -> dict[str, pd.Timestamp]:
@@ -57,18 +81,38 @@ def sp500_addition_dates() -> dict[str, pd.Timestamp]:
             raw = json.loads(_CACHE_FILE.read_text())
             return {k: pd.Timestamp(v) for k, v in raw.items()}
 
-    try:
-        resp = requests.get(WIKI_URL, headers={"User-Agent": WIKI_USER_AGENT}, timeout=20)
-        resp.raise_for_status()
-        table = pd.read_html(io.StringIO(resp.text))[0]
-        dates = pd.to_datetime(table["Date added"], errors="coerce")
-        out = {sym: dt for sym, dt in zip(table["Symbol"], dates) if pd.notna(dt)}
-        _CACHE_FILE.write_text(json.dumps({k: v.isoformat() for k, v in out.items()}))
-        return out
-    except Exception as exc:  # network hiccup, Wikipedia layout change, etc.
-        print(f"[pit_universe] WARNING: could not fetch S&P 500 addition dates ({exc}); "
-              f"proceeding with NO point-in-time mask applied.")
+    table = _sp500_table()
+    if table is None:
+        print("[pit_universe] proceeding with NO point-in-time mask applied.")
         return {}
+    dates = pd.to_datetime(table["Date added"], errors="coerce")
+    out = {sym: dt for sym, dt in zip(table["Symbol"], dates) if pd.notna(dt)}
+    _CACHE_FILE.write_text(json.dumps({k: v.isoformat() for k, v in out.items()}))
+    return out
+
+
+def sp500_tickers(yahoo_format: bool = True) -> list[str] | None:
+    """The full list of current S&P 500 constituent tickers (~500 names).
+
+    This is the systematic replacement for a hand-picked ticker list: instead
+    of an analyst choosing 25 "liquid, sector-diverse" names, the universe is
+    every name in the actual index today. It's still forward-survivorship-
+    biased on its own (see module docstring) - always run it through
+    mask_pre_inclusion() - and it still says nothing about names removed from
+    the index before today (backward survivorship, unfixed).
+
+    yahoo_format=True rewrites Wikipedia's dotted share-class tickers (BRK.B)
+    to Yahoo Finance's hyphenated form (BRK-B), since that's what yfinance and
+    every provider in this project expect. Returns None (caller should fall
+    back to a fixed list) if Wikipedia is unreachable.
+    """
+    table = _sp500_table()
+    if table is None:
+        return None
+    symbols = table["Symbol"].astype(str).tolist()
+    if yahoo_format:
+        symbols = [s.replace(".", "-") for s in symbols]
+    return symbols
 
 
 def mask_pre_inclusion(signal: pd.DataFrame, returns: pd.DataFrame,

@@ -10,9 +10,12 @@ Skeptic's DSR/CSCV gate on this specific universe and window, not to assume it d
 
 Point-in-time note: an SEC filing's `filingDate` is fixed at submission and never
 restated (unlike, say, reported financials), so the signal construction itself has
-no look-ahead. This module does NOT enforce point-in-time *universe* membership -
-today's ticker list is used across all history, which is a survivorship-bias risk
-for a real study. See README.md -> Limitations.
+no look-ahead. Universe: by default this is the full, systematic current S&P 500
+constituent list (pit_universe.sp500_tickers()), not a hand-picked subset - each
+name's pre-inclusion history is then masked out by mask_pre_inclusion() so a name
+added last month doesn't get credited with years of index-membership history it
+never had. This still says nothing about names removed from the index before
+today (backward survivorship) - see pit_universe.py and README.md -> Limitations.
 """
 from __future__ import annotations
 import json
@@ -22,7 +25,7 @@ from pathlib import Path
 import pandas as pd
 import requests
 
-from pit_universe import mask_pre_inclusion
+from pit_universe import mask_pre_inclusion, sp500_tickers
 
 # SEC requires a descriptive User-Agent identifying the requester per its
 # fair-access policy: https://www.sec.gov/os/webmaster-faq#developers
@@ -33,14 +36,14 @@ SEC_USER_AGENT = "altq-research (replace-with-your-contact@example.com)"
 CACHE_DIR = Path(__file__).parent / "data_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
-# Liquid, sector-diverse large caps - gives cross-sectional dispersion for
-# quintile ranking. Swap freely; more names = better-powered CSCV blocks.
-DEFAULT_UNIVERSE = [
+# Used only if the systematic universe below can't be fetched (Wikipedia
+# unreachable) - a hand-picked, liquid, sector-diverse fallback so the
+# provider still runs, not the intended default.
+FALLBACK_UNIVERSE = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "JPM", "BAC", "WFC",
     "XOM", "CVX", "JNJ", "PFE", "UNH", "PG", "KO", "WMT", "HD", "DIS",
     "CAT", "BA", "GE", "UPS", "NKE",
 ]
-
 _SLEEP_BETWEEN_REQUESTS = 0.15  # stay well under SEC's 10 req/sec fair-access limit
 
 
@@ -101,7 +104,15 @@ class EdgarFilingCadenceProvider:
 
     def __init__(self, universe: list[str] | None = None, lookback_years: float = 3.0,
                  filing_window_days: int = 90):
-        self.universe = universe or DEFAULT_UNIVERSE
+        if universe is not None:
+            self.universe = universe
+        else:
+            systematic = sp500_tickers()
+            if systematic is None:
+                print("[edgar_provider] WARNING: could not fetch the systematic S&P 500 "
+                      "universe; falling back to the hand-picked FALLBACK_UNIVERSE "
+                      f"({len(FALLBACK_UNIVERSE)} names).")
+            self.universe = systematic if systematic is not None else FALLBACK_UNIVERSE
         self.lookback_years = lookback_years
         self.filing_window_days = filing_window_days
         self._cache: tuple[pd.DataFrame, pd.DataFrame] | None = None

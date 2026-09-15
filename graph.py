@@ -115,7 +115,7 @@ def discovery_node(state: PipelineState) -> dict:
             id=f"H{trial}",
             data_source="SEC EDGAR submissions API: 90d trailing count of 8-K filings per issuer, free, updated on filing",
             transmission_mechanism="Elevated unscheduled 8-K disclosure cadence signals operational/financial uncertainty -> slow diffusion to inattentive investors -> short-horizon negative drift",
-            target_universe="Liquid large-cap US equities (fixed 25-name universe, see edgar_provider.DEFAULT_UNIVERSE)",
+            target_universe="Full current S&P 500 constituents, systematic (see pit_universe.sp500_tickers()), point-in-time masked",
             lag_days=3, decay_days=20,
             signal_construction="90d trailing count of 8-K filings, cross-sectional z-score/quintile rank",
             null_prediction="IC(3d) <= 0.01 or DSR < 0.95 => reject",

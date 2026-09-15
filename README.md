@@ -115,8 +115,11 @@ python run.py 5
 `edgar_provider.py` is a real, non-mock `DataProvider` implementation. It tests one
 concrete hypothesis: does an issuer's trailing 90-day count of 8-K filings (a proxy
 for unscheduled-disclosure / operational-uncertainty intensity) cross-sectionally
-predict short-horizon returns, across a fixed 25-name liquid large-cap universe.
-Both data sources are free and require no account:
+predict short-horizon returns, across the **full, systematic current S&P 500
+constituent list** (503 names, fetched live from Wikipedia via
+`pit_universe.sp500_tickers()` — not a hand-picked subset). If that fetch fails,
+it falls back to a small hand-picked `FALLBACK_UNIVERSE` so the provider still
+runs. Both data sources are free and require no account:
 
 - **Signal**: SEC EDGAR's `submissions` API (`data.sec.gov/submissions/CIK...json`),
   filtered to `8-K` filings. A filing's `filingDate` is fixed at submission and
@@ -136,12 +139,21 @@ python run.py 3
 ```
 
 Raw API responses are cached to `data_cache/` (git-ignored) so repeated runs don't
-re-hit SEC/Yahoo every time. On a first real run against the default universe and a
-3-year lookback, this hypothesis came back **REJECTed**: a raw annualized Sharpe of
-1.48 but a Deflated Sharpe Ratio of 0.91 — just under the 0.95 gate once the honest
-trial count is applied. That's the pipeline doing exactly what it's for: most
-first-pass alt-data hypotheses, even ones with a plausible economic story, don't
-survive contact with a multiple-testing-aware statistical review.
+re-hit SEC/Yahoo every time — expect the first run against the full 503-name
+universe to take several minutes (SEC fair-access sleep + ~500 filing-history
+fetches), and be near-instant afterward while the cache is warm (SEC submissions
+cache for 1 day, the ticker map and S&P 500 table for 7 days).
+
+Against the earlier, hand-picked 25-name universe, this hypothesis came back
+**REJECTed**: a raw annualized Sharpe of 1.48 but a Deflated Sharpe Ratio of 0.91 —
+just under the 0.95 gate. Re-run against the full, systematic 503-name universe,
+it's rejected far more decisively: annualized Sharpe of **-0.62**, DSR **0.014**,
+PBO **0.4**. The hand-picked list happened to include several liquid, high-beta
+names that flattered this particular signal; the systematic universe removes that
+selection bias and shows the effect for what it is. That's the pipeline — and this
+fix — doing exactly what they're for: most first-pass alt-data hypotheses don't
+survive contact with a multiple-testing-aware statistical review, and a
+non-cherry-picked universe makes that verdict harder to argue with.
 
 ### A second, independent real signal (Google Trends attention)
 
@@ -227,10 +239,17 @@ What's still a placeholder:
   universes and always will be without a licensed historical-constituents dataset.
   Treat both real DSR/PBO results above as an upper bound on what a truly
   survivorship-free study would show, not the final word.
-- Both real providers still use a small, hand-picked, fixed ticker list rather
-  than a systematically-defined universe (e.g. "all S&P 500 members, historically
-  accurate, above a liquidity floor") — fine for demonstrating the pipeline works
-  on real data, not yet a real research universe.
+- `edgar_provider.py` now uses a systematic universe (the full current S&P 500,
+  ~503 names via `pit_universe.sp500_tickers()`) instead of a hand-picked list.
+  `trends_provider.py` still can't do this: it needs a curated, unambiguous
+  brand-name search query per ticker (`TICKER_TO_QUERY`), which isn't something
+  that can be derived automatically from a ticker symbol without either a paid
+  entity-resolution feed or per-name manual review — the 12-name universe there
+  stays a deliberate, disclosed limitation, not a placeholder to "fix" later.
+- Neither universe (EDGAR's or Trends') is a *liquidity-floor-adjusted* research
+  universe — "all current S&P 500 members" and "12 unambiguous brand names" are
+  both blunter than a real desk would use, just no longer hand-tuned to flatter
+  any one hypothesis.
 - The default `DataProvider` in `graph.py` (used when `ALTQ_DATA_SOURCE=mock`) is
   still fully synthetic — useful for fast iteration on the graph/statistics
   themselves, not for research conclusions.
@@ -246,11 +265,19 @@ What's still a placeholder:
    hypothesis via `edgar_provider.py` (SEC EDGAR + Yahoo Finance).
    ~~Fix forward-survivorship bias~~ — done via `pit_universe.py`, wired into both
    real providers. ~~Wire in a second, independent real signal~~ — done via
-   `trends_provider.py` (Google Trends attention shocks). Both real hypotheses
-   tested so far were correctly REJECTed by the Skeptic gate. Next: a systematic,
-   historically-accurate universe (fixes the hand-picked-list gap above), and/or
-   a third signal from the data-sources list (AIS shipping, workforce data — see
-   project notes) once you want more than two real feeds for Discovery to draw on.
+   `trends_provider.py` (Google Trends attention shocks). ~~Systematic,
+   historically-accurate universe~~ — done for EDGAR via
+   `pit_universe.sp500_tickers()` (full 503-name S&P 500 instead of a hand-picked
+   25); re-run against that universe, the 8-K-cadence hypothesis is REJECTed far
+   more decisively (SR_ann -0.62, DSR 0.014) than it was on the hand-picked list
+   (SR_ann 1.48, DSR 0.91) — a concrete demonstration of how much a hand-picked
+   universe can flatter a result. All real hypotheses tested so far have been
+   correctly REJECTed by the Skeptic gate. Trends' universe stays hand-picked by
+   necessity (brand-name search terms don't derive from a ticker automatically —
+   see above). Next: a third, independent signal — AIS shipping and workforce
+   data were investigated and found to be paid/enterprise-only (see project
+   notes); a free source for either hasn't turned up. Revisit if a free-tier
+   option appears, or accept two real signals as sufficient for now.
 2. Re-validate DSR/PBO against synthetic panels built from *that* data source's
    actual noise characteristics.
 3. Turn on live LLM calls (`ALTQ_DRY_RUN=0`) and add server-side refusal fallbacks
