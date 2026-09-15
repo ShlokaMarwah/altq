@@ -60,12 +60,28 @@ def _cached_get(url: str, cache_path: Path, max_age_days: float = 1.0) -> dict:
     return data
 
 
-def _cik_map() -> dict[str, str]:
-    data = _cached_get(
+def _company_tickers_raw() -> dict:
+    return _cached_get(
         "https://www.sec.gov/files/company_tickers.json",
         CACHE_DIR / "company_tickers.json", max_age_days=7,
     )
+
+
+def _cik_map() -> dict[str, str]:
+    data = _company_tickers_raw()
     return {row["ticker"]: str(row["cik_str"]).zfill(10) for row in data.values()}
+
+
+def ticker_to_legal_name() -> dict[str, str]:
+    """ticker -> SEC-registered legal name (e.g. "TSLA" -> "Tesla, Inc.").
+
+    Shared with wiki_provider.py: SEC's own legal names are already
+    disambiguated ("Meta Platforms, Inc.", not the bare word "Meta"), which is
+    what lets that provider resolve a systematic universe to Wikipedia article
+    titles without hand-curation.
+    """
+    data = _company_tickers_raw()
+    return {row["ticker"]: row["title"] for row in data.values()}
 
 
 def _eight_k_dates(ticker: str, cik10: str) -> list[str]:

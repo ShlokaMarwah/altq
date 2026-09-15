@@ -191,18 +191,57 @@ Ratio of 0.24, well short of the 0.95 gate. Two-for-two real-data rejections is
 the expected base rate for first-pass alt-data ideas, not a sign anything is
 broken — see the Skeptic's whole design intent above.
 
+### A third, independent real signal (Wikipedia pageview attention)
+
+`wiki_provider.py` tests the same attention-shock mechanism as Trends, but
+from a genuinely different, official data source — Wikimedia's Pageviews REST
+API, not an unofficial scraper — and across the full systematic S&P 500
+universe rather than a hand-picked list:
+
+- **Signal**: daily Wikipedia article pageviews (`wikimedia.org/api/rest_v1/metrics/pageviews`,
+  free, no key), turned into an attention shock the same way as Trends — current
+  views minus the article's own trailing 8-period mean, in units of its own
+  trailing standard deviation.
+- **Universe**: every current S&P 500 ticker, resolved to its Wikipedia article
+  automatically from the same SEC legal names `edgar_provider.py` already
+  caches (`edgar_provider.ticker_to_legal_name()`) — no hand-curated query list,
+  unlike Trends. Getting this resolution right took real iteration: an
+  opensearch-based first attempt silently mapped "JPMorgan Chase & Co." to a
+  near-dead redirect stub instead of the real article, an `intitle:`-restricted
+  search sent "BOEING CO" to the "Boeing Model 42" article, and SEC's own data
+  quality added a third failure mode — ~8% of legal names carry a junk trailing
+  state-of-incorporation tag ("IDEX CORP /DE/") that diluted search relevance
+  enough to match a wholly unrelated page. All three are fixed in
+  `wiki_provider.py`; read its module docstring if you extend the resolution
+  logic further.
+- **Returns**: Yahoo Finance daily closes via `yfinance`, same as the other two providers.
+
+```powershell
+$env:ALTQ_DRY_RUN = "1"
+$env:ALTQ_DATA_SOURCE = "wiki"
+python run.py 3
+```
+
+502 of 503 tickers resolved correctly on a full run. This hypothesis also came
+back **REJECTed** — annualized Sharpe of 0.65, DSR 0.25, PBO 0.63 — the third
+real hypothesis in a row to fail the gate, and, like the systematic-universe
+result above, a more decisive rejection than a hand-picked list would likely
+have produced.
+
 ### Fixing forward-survivorship bias (`pit_universe.py`)
 
-Both real providers now mask out a ticker's history from before it actually
-joined the S&P 500 — sourced from Wikipedia's current-membership table (free, no
-key). This matters concretely for the Trends universe: Palantir (added
-2024-09-23) and Uber (added 2023-12-18) both fall inside the default 3-year
-lookback, so without the mask the pipeline would credit them with "large,
-liquid, index-covered" status for a stretch of history when that wasn't true yet.
+All three real providers now mask out a ticker's history from before it
+actually joined the S&P 500 — sourced from Wikipedia's current-membership table
+(free, no key). This matters concretely for the Trends universe: Palantir
+(added 2024-09-23) and Uber (added 2023-12-18) both fall inside the default
+3-year lookback, so without the mask the pipeline would credit them with
+"large, liquid, index-covered" status for a stretch of history when that
+wasn't true yet.
 
 **What this does not fix**: backward survivorship. A company removed from the
 S&P 500 before today (bankruptcy, acquisition, delisting) is absent from
-Wikipedia's *current* membership table and can never appear in either universe —
+Wikipedia's *current* membership table and can never appear in any of these
+universes —
 there's no free source for full point-in-time index history. Any DSR/CSCV result
 here still overstates achievable Sharpe to the extent failed or acquired names
 would have dragged on it. Fixing that properly needs a licensed dataset (WRDS/CRSP
@@ -214,7 +253,7 @@ prototype, and flagged as an open item below rather than glossed over.
 | Variable | Default | Effect |
 |---|---|---|
 | `ALTQ_DRY_RUN` | `1` | `1` = stub hypothesis + rule-based Skeptic verdict, no API cost. `0` = live `claude-opus-5` calls. |
-| `ALTQ_DATA_SOURCE` | `mock` | `mock` = synthetic `DataProvider`. `edgar` = SEC EDGAR + Yahoo Finance (`EdgarFilingCadenceProvider`). `trends` = Google Trends + Yahoo Finance (`GoogleTrendsAttentionProvider`). |
+| `ALTQ_DATA_SOURCE` | `mock` | `mock` = synthetic `DataProvider`. `edgar` = SEC EDGAR + Yahoo Finance (`EdgarFilingCadenceProvider`). `trends` = Google Trends + Yahoo Finance (`GoogleTrendsAttentionProvider`). `wiki` = Wikipedia pageviews + Yahoo Finance (`WikipediaAttentionProvider`). |
 | `ALTQ_TRUE_BETA` | `0.0` | Strength of the true signal baked into the mock `DataProvider`. Only affects `ALTQ_DATA_SOURCE=mock` runs. |
 | `ANTHROPIC_API_KEY` | — | Required when `ALTQ_DRY_RUN=0`. |
 
@@ -235,18 +274,18 @@ What's still a placeholder:
 - **Backward survivorship bias is not fixed, and can't be with free data.**
   `pit_universe.py` masks out a ticker's history before it joined the S&P 500
   (forward bias — fixed), but a company removed from the index before today
-  (bankruptcy, acquisition, delisting) is simply absent from both real providers'
-  universes and always will be without a licensed historical-constituents dataset.
-  Treat both real DSR/PBO results above as an upper bound on what a truly
-  survivorship-free study would show, not the final word.
-- `edgar_provider.py` now uses a systematic universe (the full current S&P 500,
-  ~503 names via `pit_universe.sp500_tickers()`) instead of a hand-picked list.
-  `trends_provider.py` still can't do this: it needs a curated, unambiguous
-  brand-name search query per ticker (`TICKER_TO_QUERY`), which isn't something
-  that can be derived automatically from a ticker symbol without either a paid
-  entity-resolution feed or per-name manual review — the 12-name universe there
-  stays a deliberate, disclosed limitation, not a placeholder to "fix" later.
-- Neither universe (EDGAR's or Trends') is a *liquidity-floor-adjusted* research
+  (bankruptcy, acquisition, delisting) is simply absent from all three real
+  providers' universes and always will be without a licensed historical-
+  constituents dataset. Treat every real DSR/PBO result above as an upper bound
+  on what a truly survivorship-free study would show, not the final word.
+- `edgar_provider.py` and `wiki_provider.py` both use a systematic universe (the
+  full current S&P 500, ~503 names via `pit_universe.sp500_tickers()`) instead of
+  a hand-picked list. `trends_provider.py` still can't do this: it needs a
+  curated, unambiguous brand-name search query per ticker (`TICKER_TO_QUERY`),
+  since Google Trends has no equivalent of Wikipedia's exact-title/redirect
+  lookup to disambiguate a bare brand name automatically — the 12-name universe
+  there stays a deliberate, disclosed limitation, not a placeholder to "fix" later.
+- None of the three universes is a *liquidity-floor-adjusted* research
   universe — "all current S&P 500 members" and "12 unambiguous brand names" are
   both blunter than a real desk would use, just no longer hand-tuned to flatter
   any one hypothesis.
@@ -263,7 +302,7 @@ What's still a placeholder:
 
 1. ~~Replace `DataProvider.load()` with a real data source~~ — done for one
    hypothesis via `edgar_provider.py` (SEC EDGAR + Yahoo Finance).
-   ~~Fix forward-survivorship bias~~ — done via `pit_universe.py`, wired into both
+   ~~Fix forward-survivorship bias~~ — done via `pit_universe.py`, wired into all
    real providers. ~~Wire in a second, independent real signal~~ — done via
    `trends_provider.py` (Google Trends attention shocks). ~~Systematic,
    historically-accurate universe~~ — done for EDGAR via
@@ -271,13 +310,16 @@ What's still a placeholder:
    25); re-run against that universe, the 8-K-cadence hypothesis is REJECTed far
    more decisively (SR_ann -0.62, DSR 0.014) than it was on the hand-picked list
    (SR_ann 1.48, DSR 0.91) — a concrete demonstration of how much a hand-picked
-   universe can flatter a result. All real hypotheses tested so far have been
-   correctly REJECTed by the Skeptic gate. Trends' universe stays hand-picked by
-   necessity (brand-name search terms don't derive from a ticker automatically —
-   see above). Next: a third, independent signal — AIS shipping and workforce
-   data were investigated and found to be paid/enterprise-only (see project
-   notes); a free source for either hasn't turned up. Revisit if a free-tier
-   option appears, or accept two real signals as sufficient for now.
+   universe can flatter a result. ~~Wire in a third, independent real signal~~ —
+   done via `wiki_provider.py` (Wikipedia pageview attention shocks). AIS
+   shipping and workforce data were investigated first and found to be
+   paid/enterprise-only (see project notes); Wikipedia pageviews turned out to
+   be a genuinely free, official-API alternative that also let the universe be
+   systematic rather than hand-picked, unlike Trends. All three real hypotheses
+   tested so far have been correctly REJECTed by the Skeptic gate. Trends'
+   universe stays hand-picked by necessity (see above). Next: a fourth signal if
+   one turns up, or move on to the items below — three independent real,
+   statistically-gated hypotheses is a reasonable place to call this phase done.
 2. Re-validate DSR/PBO against synthetic panels built from *that* data source's
    actual noise characteristics.
 3. Turn on live LLM calls (`ALTQ_DRY_RUN=0`) and add server-side refusal fallbacks

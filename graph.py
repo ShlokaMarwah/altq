@@ -12,7 +12,7 @@ from prompts import DISCOVERY_SYSTEM, SKEPTIC_SYSTEM
 
 MODEL = "claude-opus-5"
 DRY_RUN = os.environ.get("ALTQ_DRY_RUN", "1") == "1"   # 1 = no API calls, deterministic stubs
-DATA_SOURCE = os.environ.get("ALTQ_DATA_SOURCE", "mock")  # "mock" | "edgar" | "trends"
+DATA_SOURCE = os.environ.get("ALTQ_DATA_SOURCE", "mock")  # "mock" | "edgar" | "trends" | "wiki"
 
 
 # ---------- schemas ----------
@@ -92,6 +92,9 @@ def _build_provider():
     if DATA_SOURCE == "trends":
         from trends_provider import GoogleTrendsAttentionProvider
         return GoogleTrendsAttentionProvider()
+    if DATA_SOURCE == "wiki":
+        from wiki_provider import WikipediaAttentionProvider
+        return WikipediaAttentionProvider()
     return DataProvider()
 
 
@@ -131,6 +134,17 @@ def discovery_node(state: PipelineState) -> dict:
             signal_construction="Attention shock = (interest - trailing 8-period mean) / trailing 8-period std, cross-sectional quintile L/S",
             null_prediction="IC(3d) <= 0.01 or DSR < 0.95 => reject",
             confounders=["earnings-date clustering", "product-launch calendar", "market-wide volatility regime"])],
+            declared_n_trials=6)
+    elif DRY_RUN and DATA_SOURCE == "wiki":
+        batch = HypothesisBatch(hypotheses=[Hypothesis(
+            id=f"H{trial}",
+            data_source="Wikipedia pageviews (Wikimedia REST API, official), daily, absolute view counts, relative to own trailing baseline",
+            transmission_mechanism="Abnormal spike in a company's Wikipedia article traffic -> public-attention shock -> short-horizon price pressure (Da, Engelberg & Gao 2011 mechanism)",
+            target_universe="Full current S&P 500 constituents, systematic (article titles resolved from SEC legal names, see wiki_provider.py), point-in-time masked",
+            lag_days=3, decay_days=14,
+            signal_construction="Attention shock = (pageviews - trailing 8d mean) / trailing 8d std, cross-sectional quintile L/S",
+            null_prediction="IC(3d) <= 0.01 or DSR < 0.95 => reject",
+            confounders=["news-event/product-launch clustering", "earnings-date clustering", "general newsworthiness unrelated to trading intent"])],
             declared_n_trials=6)
     elif DRY_RUN:
         batch = HypothesisBatch(hypotheses=[Hypothesis(
